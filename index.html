@@ -2,250 +2,319 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>Subtitle Editor with Video + Timestamp + Audio Visualization</title>
+<title>Subtitle Editor – Waveform + Draggable Timeline</title>
 
 <style>
-    body {
-        margin: 0;
-        background: #1c1c1c;
-        color: #fff;
-        font-family: Arial, sans-serif;
-        display: flex;
-        height: 100vh;
-        overflow: hidden;
-    }
+body {
+    margin: 0;
+    background: #1b1b1b;
+    color: white;
+    font-family: Arial, sans-serif;
+    display: flex;
+    height: 100vh;
+    overflow: hidden;
+}
 
-    /* LEFT PANEL — Subtitles */
-    #subtitlePanel {
-        width: 30%;
-        background: #111;
-        padding: 15px;
-        overflow-y: auto;
-        border-right: 2px solid #333;
-    }
+/* LEFT: SUBTITLE LIST */
+#subtitlePanel {
+    width: 28%;
+    background: #111;
+    padding: 15px;
+    overflow-y: auto;
+}
+.subtitle-entry {
+    background: #222;
+    padding: 10px;
+    margin-bottom: 10px;
+    border-radius: 4px;
+    border-left: 4px solid #368B9E;
+}
+.subtitle-entry input {
+    width: 100%;
+    margin-top: 5px;
+    background: #111;
+    color: white;
+    border: none;
+    padding: 6px;
+}
 
-    h2 {
-        margin-top: 0;
-    }
+/* RIGHT: VIDEO + WAVEFORM + TIMELINE */
+#main {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+}
+#videoContainer {
+    padding: 10px;
+}
+video {
+    width: 100%;
+    border-radius: 6px;
+}
+#waveformCanvas {
+    height: 140px;
+    width: 100%;
+    background: #222;
+}
 
-    .subtitle-entry {
-        padding: 10px;
-        margin-bottom: 10px;
-        background: #222;
-        border-radius: 4px;
-        border-left: 4px solid #368B9E;
-    }
+/* TIMELINE */
+#timeline {
+    position: relative;
+    height: 120px;
+    background: #181818;
+    border-top: 2px solid #333;
+}
+.subtitle-block {
+    position: absolute;
+    top: 20px;
+    height: 40px;
+    background: #368B9Eaa;
+    border: 2px solid #368B9E;
+    border-radius: 4px;
+    cursor: grab;
+}
+.handle {
+    position: absolute;
+    width: 8px;
+    top: 0;
+    bottom: 0;
+    background: #fff;
+    cursor: ew-resize;
+}
+.handle-start { left: -4px; }
+.handle-end { right: -4px; }
 
-    .subtitle-entry input {
-        width: 100%;
-        background: #111;
-        color: #fff;
-        border: none;
-        padding: 5px;
-        margin-top: 5px;
-    }
-
-    /* RIGHT SIDE — Video + Canvas */
-    #main {
-        flex: 1;
-        display: flex;
-        flex-direction: column;
-    }
-
-    #topSection {
-        height: 70%;
-        display: flex;
-        flex-direction: column;
-        padding: 10px;
-    }
-
-    video {
-        width: 100%;
-        height: auto;
-        border-radius: 6px;
-    }
-
-    #visualizer {
-        width: 100%;
-        height: 140px;
-        background: #222;
-        margin-top: 10px;
-    }
-
-    #bottomHUD {
-        padding: 10px;
-        background: #111;
-        border-top: 2px solid #333;
-    }
+#statusBar {
+    background: #111;
+    padding: 10px;
+    border-top: 2px solid #333;
+}
 </style>
 </head>
 <body>
 
-<!-- LEFT: SUBTITLE LIST -->
+<!-- LEFT PANEL -->
 <div id="subtitlePanel">
     <h2>Subtitles</h2>
     <div id="subtitleList"></div>
 </div>
 
-<!-- RIGHT: VIDEO & VISUALIZER -->
+<!-- RIGHT PANEL -->
 <div id="main">
 
-    <div id="topSection">
+    <!-- VIDEO -->
+    <div id="videoContainer">
         <input type="file" id="videoUpload" accept="video/*">
         <video id="video" controls></video>
-        <canvas id="visualizer"></canvas>
     </div>
 
-    <div id="bottomHUD">
-        <p><b>Shortcuts:</b>  
-        <br>Space = Play/Pause  
-        <br><b>S</b> = Capture timestamp as start of next subtitle  
-        <br><b>Enter</b> = End previous subtitle & create new one  
-        </p>
-        <p id="status">Status: Waiting…</p>
-    </div>
+    <!-- WAVEFORM -->
+    <canvas id="waveformCanvas"></canvas>
 
+    <!-- TIMELINE -->
+    <div id="timeline"></div>
+
+    <!-- STATUS -->
+    <div id="statusBar">
+        <b>Shortcuts:</b> Space = Play/Pause • S = Start Subtitle • Enter = Next Subtitle  
+        <p id="status">Waiting…</p>
+    </div>
 </div>
 
 <script>
-/* --------------------------
-   VIDEO UPLOAD
--------------------------- */
+/* -------------------------------------
+   VIDEO LOAD
+------------------------------------- */
 const video = document.getElementById("video");
-document.getElementById("videoUpload").addEventListener("change", function(e) {
+document.getElementById("videoUpload").addEventListener("change", async function(e) {
     const file = e.target.files[0];
     if (!file) return;
+
     video.src = URL.createObjectURL(file);
+    await video.load();
+
+    decodeWaveform(file);
 });
 
-/* --------------------------
-   SUBTITLE MANAGEMENT
--------------------------- */
-let subtitles = [];
-let currentSubtitle = null;
 
-const subtitleListDiv = document.getElementById("subtitleList");
-const status = document.getElementById("status");
+/* -------------------------------------
+   SUBTITLE DATA
+------------------------------------- */
+let subtitles = [];
+let current = null;
 
 function addSubtitle(startTime) {
-    // Close previous subtitle
-    if (currentSubtitle) {
-        currentSubtitle.end = startTime;
-    }
+    if (current) current.end = startTime;
 
-    // Create new subtitle
-    const newSub = {
-        start: startTime,
-        end: null,
-        text: ""
-    };
+    const newSub = { start: startTime, end: null, text: "" };
     subtitles.push(newSub);
-    currentSubtitle = newSub;
+    current = newSub;
 
     renderSubtitles();
+    renderTimeline();
 }
 
 function renderSubtitles() {
-    subtitleListDiv.innerHTML = "";
-    subtitles.forEach((sub, i) => {
+    const container = document.getElementById("subtitleList");
+    container.innerHTML = "";
+
+    subtitles.forEach((s, i) => {
         const div = document.createElement("div");
         div.className = "subtitle-entry";
 
         div.innerHTML = `
-            <div><b>${formatTime(sub.start)}</b> → <b>${sub.end ? formatTime(sub.end) : "..."}</b></div>
-            <input type="text" value="${sub.text}" placeholder="Type subtitle here..."
-            oninput="subtitles[${i}].text = this.value">
+            <div><b>${timeStr(s.start)}</b> → <b>${s.end ? timeStr(s.end) : "..."}</b></div>
+            <input value="${s.text}" placeholder="Subtitle text..."
+                oninput="subtitles[${i}].text=this.value">
         `;
 
-        subtitleListDiv.appendChild(div);
+        container.appendChild(div);
     });
 }
 
-function formatTime(t) {
-    const sec = t % 60;
-    const min = Math.floor(t / 60);
-    return `${String(min).padStart(2, "0")}:${String(sec.toFixed(3)).padStart(6, "0")}`;
+function timeStr(t) {
+    if (!t && t !== 0) return "…";
+    return t.toFixed(2) + "s";
 }
 
-/* --------------------------
+/* -------------------------------------
    KEYBOARD SHORTCUTS
--------------------------- */
+------------------------------------- */
 document.addEventListener("keydown", (e) => {
     if (e.code === "Space") {
         e.preventDefault();
         video.paused ? video.play() : video.pause();
     }
 
-    // S → Capture timestamp as new subtitle start
     if (e.key === "s" || e.key === "S") {
         e.preventDefault();
         video.pause();
         const t = video.currentTime;
         addSubtitle(t);
-        status.textContent = `New subtitle started at ${t.toFixed(3)}s`;
+        status.textContent = `Subtitle started at ${t.toFixed(2)}s`;
     }
 
-    // Enter → Close previous & begin next using prior end
     if (e.key === "Enter") {
         e.preventDefault();
         const t = video.currentTime;
         addSubtitle(t);
-        status.textContent = `Previous ended & new subtitle began at ${t.toFixed(3)}s`;
+        status.textContent = `Subtitle ended & new started at ${t.toFixed(2)}s`;
     }
 });
 
-/* --------------------------
-   AUDIO VISUALIZATION
--------------------------- */
-const canvas = document.getElementById("visualizer");
-const ctx = canvas.getContext("2d");
+const status = document.getElementById("status");
 
-let audioCtx, analyser, sourceNode, dataArray;
+/* -------------------------------------
+   WAVEFORM GENERATION (REAL WAVEFORM)
+------------------------------------- */
+const waveformCanvas = document.getElementById("waveformCanvas");
+const wctx = waveformCanvas.getContext("2d");
+waveformCanvas.width = waveformCanvas.clientWidth;
+waveformCanvas.height = waveformCanvas.clientHeight;
 
-function setupAudio() {
-    if (audioCtx) return;
+async function decodeWaveform(file) {
+    const arrayBuf = await file.arrayBuffer();
+    const audioCtx = new AudioContext();
+    const audioBuf = await audioCtx.decodeAudioData(arrayBuf);
 
-    audioCtx = new AudioContext();
-    analyser = audioCtx.createAnalyser();
-    analyser.fftSize = 256;
-
-    const bufferLen = analyser.frequencyBinCount;
-    dataArray = new Uint8Array(bufferLen);
-
-    sourceNode = audioCtx.createMediaElementSource(video);
-    sourceNode.connect(analyser);
-    analyser.connect(audioCtx.destination);
-
-    drawVisualizer();
+    drawWaveform(audioBuf);
 }
 
-function drawVisualizer() {
-    requestAnimationFrame(drawVisualizer);
+function drawWaveform(buffer) {
+    const raw = buffer.getChannelData(0);
+    const step = Math.floor(raw.length / waveformCanvas.width);
+    const amp = waveformCanvas.height / 2;
 
-    analyser.getByteFrequencyData(dataArray);
+    wctx.clearRect(0, 0, waveformCanvas.width, waveformCanvas.height);
+    wctx.fillStyle = "#368B9E";
 
-    ctx.fillStyle = "#111";
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
-
-    const barWidth = canvas.width / dataArray.length;
-
-    for (let i = 0; i < dataArray.length; i++) {
-        const h = dataArray[i];
-        ctx.fillStyle = `rgb(${h + 50}, 80, 120)`;
-        ctx.fillRect(i * barWidth, canvas.height - h, barWidth, h);
+    for (let i = 0; i < waveformCanvas.width; i++) {
+        let min = 1, max = -1;
+        for (let j = 0; j < step; j++) {
+            const v = raw[(i * step) + j];
+            if (v < min) min = v;
+            if (v > max) max = v;
+        }
+        wctx.fillRect(i, (1 + min) * amp, 1, Math.max(1, (max - min) * amp));
     }
 }
 
-video.addEventListener("play", setupAudio);
+/* -------------------------------------
+   TIMELINE WITH DRAGGABLE MARKERS
+------------------------------------- */
+const timeline = document.getElementById("timeline");
 
-// Resize canvas with window
-window.addEventListener("resize", () => {
-    canvas.width = canvas.clientWidth;
-    canvas.height = canvas.clientHeight;
-});
-canvas.width = canvas.clientWidth;
-canvas.height = canvas.clientHeight;
+function renderTimeline() {
+    timeline.innerHTML = "";
+
+    const pxPerSec = timeline.clientWidth / video.duration;
+
+    subtitles.forEach((sub, index) => {
+        if (sub.end === null) return; // incomplete subtitle
+
+        const block = document.createElement("div");
+        block.className = "subtitle-block";
+
+        block.style.left = (sub.start * pxPerSec) + "px";
+        block.style.width = ((sub.end - sub.start) * pxPerSec) + "px";
+
+        // Resize handles
+        const hStart = document.createElement("div");
+        hStart.className = "handle handle-start";
+
+        const hEnd = document.createElement("div");
+        hEnd.className = "handle handle-end";
+
+        block.appendChild(hStart);
+        block.appendChild(hEnd);
+
+        // Drag start handle
+        hStart.onmousedown = (e) => startResize(e, index, true);
+        // Drag end handle
+        hEnd.onmousedown = (e) => startResize(e, index, false);
+
+        timeline.appendChild(block);
+    });
+}
+
+/* Resize logic */
+let dragging = false;
+let dragIndex = null;
+let dragIsStart = false;
+
+function startResize(e, index, isStart) {
+    dragging = true;
+    dragIndex = index;
+    dragIsStart = isStart;
+
+    document.onmousemove = resizeMove;
+    document.onmouseup = stopResize;
+}
+
+function resizeMove(e) {
+    if (!dragging) return;
+
+    const rect = timeline.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    const pxPerSec = timeline.clientWidth / video.duration;
+    const t = Math.max(0, Math.min(video.duration, x / pxPerSec));
+
+    if (dragIsStart) {
+        subtitles[dragIndex].start = Math.min(t, subtitles[dragIndex].end - 0.1);
+    } else {
+        subtitles[dragIndex].end = Math.max(t, subtitles[dragIndex].start + 0.1);
+    }
+
+    renderSubtitles();
+    renderTimeline();
+}
+
+function stopResize() {
+    dragging = false;
+    document.onmousemove = null;
+    document.onmouseup = null;
+}
+
 </script>
-
 </body>
 </html>
